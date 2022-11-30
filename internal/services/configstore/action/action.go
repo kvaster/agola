@@ -30,6 +30,8 @@ type ActionHandler struct {
 	d               *db.DB
 	lf              lock.LockFactory
 	maintenanceMode bool
+
+	maintenanceModePrepared bool
 }
 
 func NewActionHandler(log zerolog.Logger, d *db.DB, lf lock.LockFactory) *ActionHandler {

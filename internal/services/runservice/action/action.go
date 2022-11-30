@@ -40,6 +40,8 @@ type ActionHandler struct {
 	ost             *objectstorage.ObjStorage
 	lf              lock.LockFactory
 	maintenanceMode bool
+
+	maintenanceModePrepared bool
 }
 
 func NewActionHandler(log zerolog.Logger, d *db.DB, ost *objectstorage.ObjStorage, lf lock.LockFactory) *ActionHandler {
