@@ -36,6 +36,7 @@ func genRuntime(c *config.Config, ce *config.Runtime, variables map[string]strin
 	for _, cc := range ce.Containers {
 		env := genEnv(cc.Environment, variables)
 		container := &rstypes.Container{
+			Name:        cc.Name,
 			Image:       cc.Image,
 			Environment: env,
 			User:        cc.User,
@@ -127,6 +128,7 @@ else
 fi
 `, genCloneOptions(cs))
 
+		rs.Container = cs.Container
 		return rs
 
 	case *config.RunStep:
@@ -141,6 +143,7 @@ fi
 		rs.WorkingDir = cs.WorkingDir
 		rs.Shell = cs.Shell
 		rs.Tty = cs.Tty
+		rs.Container = cs.Container
 		return rs
 
 	case *config.SaveToWorkspaceStep:

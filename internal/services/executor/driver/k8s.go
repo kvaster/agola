@@ -96,6 +96,8 @@ type K8sPod struct {
 	restconfig    *restclient.Config
 	client        *kubernetes.Clientset
 	initVolumeDir string
+
+	mainContainerName string
 }
 
 type K8sDriverCreateOption func(*K8sDriver)
@@ -402,17 +404,30 @@ func (d *K8sDriver) NewPod(ctx context.Context, podConfig *PodConfig, out io.Wri
 						EmptyDir: &corev1.EmptyDirVolumeSource{},
 					},
 				},
+				{
+					Name: "projectvolume",
+					VolumeSource: corev1.VolumeSource{
+						EmptyDir: &corev1.EmptyDirVolumeSource{},
+					},
+				},
 			},
 		},
 	}
 
+	realMainContainerName := ""
+
 	// define containers
 	for cIndex, containerConfig := range podConfig.Containers {
-		var containerName string
+		containerName := containerConfig.Name
+		if containerName == "" {
+			if cIndex == 0 {
+				containerName = mainContainerName
+			} else {
+				containerName = fmt.Sprintf("service%d", cIndex)
+			}
+		}
 		if cIndex == 0 {
-			containerName = mainContainerName
-		} else {
-			containerName = fmt.Sprintf("service%d", cIndex)
+			realMainContainerName = containerName
 		}
 		c := corev1.Container{
 			Name:       containerName,
@@ -428,13 +443,17 @@ func (d *K8sDriver) NewPod(ctx context.Context, podConfig *PodConfig, out io.Wri
 				Privileged: &containerConfig.Privileged,
 			},
 		}
-		if cIndex == 0 {
+		if containerName != "" {
 			// main container requires the initvolume containing the toolbox
 			c.VolumeMounts = []corev1.VolumeMount{
 				{
 					Name:      "agolavolume",
 					MountPath: podConfig.InitVolumeDir,
 					ReadOnly:  true,
+				},
+				{
+					Name:      "projectvolume",
+					MountPath: defaultProjectDir,
 				},
 			}
 		}
@@ -535,33 +554,12 @@ func (d *K8sDriver) NewPod(ctx context.Context, podConfig *PodConfig, out io.Wri
 	}
 
 	// get the pod arch
-	req := coreclient.RESTClient().
-		Post().
-		Namespace(pod.Namespace).
-		Resource("pods").
-		Name(pod.Name).
-		SubResource("exec").
-		VersionedParams(&corev1.PodExecOptions{
-			Container: "initcontainer",
-			Command:   []string{"uname", "-m"},
-			Stdout:    true,
-			Stderr:    true,
-			TTY:       false,
-		}, scheme.ParameterCodec)
-
-	exec, err := remotecommand.NewSPDYExecutor(d.restconfig, "POST", req.URL())
-	if err != nil {
-		return nil, errors.Wrapf(err, "failed to generate k8s client spdy executor for url %q, method: POST", req.URL())
-	}
-
 	stdout := bytes.Buffer{}
-	err = exec.StreamWithContext(ctx, remotecommand.StreamOptions{
-		Stdout: &stdout,
-		Stderr: out,
-	})
+	err = d.runInitCmd(ctx, coreclient, pod, []string{"uname", "-m"}, nil, &stdout, out)
 	if err != nil {
-		return nil, errors.Wrapf(err, "failed to execute command on initcontainer")
+		return nil, err
 	}
+
 	osArch := strings.TrimSpace(stdout.String())
 
 	var arch types.Arch
@@ -591,62 +589,16 @@ func (d *K8sDriver) NewPod(ctx context.Context, podConfig *PodConfig, out io.Wri
 	}
 	defer srcArchive.Close()
 
-	req = coreclient.RESTClient().
-		Post().
-		Namespace(pod.Namespace).
-		Resource("pods").
-		Name(pod.Name).
-		SubResource("exec").
-		VersionedParams(&corev1.PodExecOptions{
-			Container: "initcontainer",
-			Command:   []string{"tar", "xf", "-", "-C", podConfig.InitVolumeDir},
-			Stdin:     true,
-			Stdout:    true,
-			Stderr:    true,
-			TTY:       false,
-		}, scheme.ParameterCodec)
-
-	exec, err = remotecommand.NewSPDYExecutor(d.restconfig, "POST", req.URL())
-	if err != nil {
-		return nil, errors.Wrapf(err, "failed to generate k8s client spdy executor for url %q, method: POST", req.URL())
-	}
-
 	fmt.Fprintf(out, "extracting toolbox\n")
-	err = exec.StreamWithContext(ctx, remotecommand.StreamOptions{
-		Stdin:  srcArchive,
-		Stdout: out,
-		Stderr: out,
-	})
+	err = d.runInitCmd(ctx, coreclient, pod, []string{"tar", "xf", "-", "-C", podConfig.InitVolumeDir}, srcArchive, out, out)
 	if err != nil {
-		return nil, errors.Wrapf(err, "failed to execute command on initcontainer")
+		return nil, err
 	}
 	fmt.Fprintf(out, "extracting toolbox done\n")
 
-	req = coreclient.RESTClient().
-		Post().
-		Namespace(pod.Namespace).
-		Resource("pods").
-		Name(pod.Name).
-		SubResource("exec").
-		VersionedParams(&corev1.PodExecOptions{
-			Container: "initcontainer",
-			Command:   []string{"touch", "/tmp/done"},
-			Stdout:    true,
-			Stderr:    true,
-			TTY:       false,
-		}, scheme.ParameterCodec)
-
-	exec, err = remotecommand.NewSPDYExecutor(d.restconfig, "POST", req.URL())
+	err = d.runInitCmd(ctx, coreclient, pod, []string{"touch", "/tmp/done"}, nil, out, out)
 	if err != nil {
-		return nil, errors.Wrapf(err, "failed to generate k8s client spdy executor for url %q, method: POST", req.URL())
-	}
-
-	err = exec.StreamWithContext(ctx, remotecommand.StreamOptions{
-		Stdout: out,
-		Stderr: out,
-	})
-	if err != nil {
-		return nil, errors.Wrapf(err, "failed to execute command on initcontainer")
+		return nil, err
 	}
 
 	watcher, err = podClient.Watch(ctx,
@@ -678,7 +630,50 @@ func (d *K8sDriver) NewPod(ctx context.Context, podConfig *PodConfig, out io.Wri
 		restconfig:    d.restconfig,
 		client:        d.client,
 		initVolumeDir: podConfig.InitVolumeDir,
+
+		mainContainerName: realMainContainerName,
 	}, nil
+}
+
+func (d *K8sDriver) runInitCmd(
+	ctx context.Context,
+	coreclient *corev1client.CoreV1Client,
+	pod *corev1.Pod,
+	cmd []string,
+	stdin io.Reader,
+	stdout io.Writer,
+	stderr io.Writer,
+) error {
+	req := coreclient.RESTClient().
+		Post().
+		Namespace(pod.Namespace).
+		Resource("pods").
+		Name(pod.Name).
+		SubResource("exec").
+		VersionedParams(&corev1.PodExecOptions{
+			Container: "initcontainer",
+			Command:   cmd,
+			Stdin:     stdin != nil,
+			Stdout:    stdout != nil,
+			Stderr:    stderr != nil,
+			TTY:       false,
+		}, scheme.ParameterCodec)
+
+	exec, err := remotecommand.NewSPDYExecutor(d.restconfig, "POST", req.URL())
+	if err != nil {
+		return errors.Wrapf(err, "failed to generate k8s client spdy executor for url %q, method: POST", req.URL())
+	}
+
+	err = exec.StreamWithContext(ctx, remotecommand.StreamOptions{
+		Stdin:  stdin,
+		Stdout: stdout,
+		Stderr: stderr,
+	})
+	if err != nil {
+		return errors.Wrapf(err, "failed to execute command on initcontainer")
+	}
+
+	return nil
 }
 
 func (d *K8sDriver) GetPods(ctx context.Context, all bool) ([]Pod, error) {
@@ -763,6 +758,11 @@ func (p *K8sPod) Exec(ctx context.Context, execConfig *ExecConfig) (ContainerExe
 	cmd := []string{filepath.Join(p.initVolumeDir, "agola-toolbox"), "exec", "-e", string(envj), "-w", execConfig.WorkingDir, "--"}
 	cmd = append(cmd, execConfig.Cmd...)
 
+	containerName := execConfig.Container
+	if containerName == "" {
+		containerName = p.mainContainerName
+	}
+
 	req := coreclient.RESTClient().
 		Post().
 		Namespace(p.namespace).
@@ -770,7 +770,7 @@ func (p *K8sPod) Exec(ctx context.Context, execConfig *ExecConfig) (ContainerExe
 		Name(p.id).
 		SubResource("exec").
 		VersionedParams(&corev1.PodExecOptions{
-			Container: mainContainerName,
+			Container: containerName,
 			Command:   cmd,
 			Stdin:     execConfig.AttachStdin,
 			Stdout:    execConfig.Stdout != nil,
