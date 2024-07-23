@@ -69,12 +69,23 @@ func isMaintenanceEnabled(d *db.DB, tx *sql.Tx) (bool, error) {
 }
 
 func (h *ActionHandler) IsMaintenanceEnabled(ctx context.Context) (bool, error) {
-	var enabled bool
-	err := h.d.Do(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.Exec(maintenanceTableDDL); err != nil {
-			return errors.Wrapf(err, "failed to create %s table", maintenanceTableName)
+	if !h.maintenanceModePrepared {
+		err := h.d.Do(ctx, func(tx *sql.Tx) error {
+			if _, err := tx.Exec(maintenanceTableDDL); err != nil {
+				return errors.Wrapf(err, "failed to create %s table", maintenanceTableName)
+			}
+			return nil
+		})
+
+		if err != nil {
+			return false, errors.WithStack(err)
 		}
 
+		h.maintenanceModePrepared = true
+	}
+
+	var enabled bool
+	err := h.d.Do(ctx, func(tx *sql.Tx) error {
 		var err error
 		enabled, err = isMaintenanceEnabled(h.d, tx)
 		if err != nil {
