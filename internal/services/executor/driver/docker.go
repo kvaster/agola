@@ -385,7 +385,7 @@ func (d *DockerDriver) createContainer(ctx context.Context, index int, podConfig
 		mounts = append(mounts, mount.Mount{
 			Type:   mount.TypeVolume,
 			Source: projectVol.Name,
-			Target: defaultProjectDir,
+			Target: podConfig.SharedVolumeDir,
 		})
 	}
 
