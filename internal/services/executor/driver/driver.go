@@ -45,8 +45,6 @@ const (
 
 	containerIndexKey = labelPrefix + "containerindex"
 	containerNameKey  = labelPrefix + "name"
-
-	defaultProjectDir = "/project" // TODO: should be configurable
 )
 
 // Driver is a generic interface around the pod concept (a group of "containers"
@@ -90,6 +88,8 @@ type PodConfig struct {
 	TaskID     string
 	Containers []*ContainerConfig
 	Arch       types.Arch
+	// The container dir where the shared project volume will be mounted
+	SharedVolumeDir string
 	// The container dir where the init volume will be mounted
 	InitVolumeDir string
 	DockerConfig  *registry.DockerConfig

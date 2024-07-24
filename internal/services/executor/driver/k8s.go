@@ -453,7 +453,7 @@ func (d *K8sDriver) NewPod(ctx context.Context, podConfig *PodConfig, out io.Wri
 				},
 				{
 					Name:      "projectvolume",
-					MountPath: defaultProjectDir,
+					MountPath: podConfig.SharedVolumeDir,
 				},
 			}
 		}
