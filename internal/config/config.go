@@ -35,7 +35,7 @@ const (
 	maxTaskNameLength = 100
 	maxStepNameLength = 100
 
-	defaultWorkingDir = "/project"
+	defaultWorkingDir = "/agola"
 )
 
 type ConfigFormat int
